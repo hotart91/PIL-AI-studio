@@ -5,21 +5,12 @@ import os
 import requests
 from io import BytesIO
 import random
-from streamlit_lottie import st_lottie
-from rembg import remove # Used for clean subject isolation
+from rembg import remove # <--- Critical new import
 
 # ==========================================
-# 1. PAGE CONFIGURATION & CACHING
+# 1. PAGE CONFIGURATION & SESSION MEMORY
 # ==========================================
 st.set_page_config(page_title="PIL | Digital Innovator", layout="wide", initial_sidebar_state="collapsed")
-
-@st.cache_data
-def load_lottieurl(url: str):
-    try:
-        r = requests.get(url, timeout=5)
-        return r.json() if r.status_code == 200 else None
-    except:
-        return None
 
 if 'final_image' not in st.session_state:
     st.session_state.final_image = None
@@ -27,11 +18,11 @@ if 'generation_successful' not in st.session_state:
     st.session_state.generation_successful = False
 
 # ==========================================
-# 2. BRANDING LOGIC & INVENTORIES
+# 2. STUDIO COMPOSITING LOGIC (LOGO MASK FIX)
 # ==========================================
-def apply_branding(base_img):
-    """Safely apply logos only if files exist"""
-    temp_img = base_img.convert("RGBA")
+def apply_campaign_branding(final_composite_image):
+    """Overlays transparent logos with proper masking logic to force transparency."""
+    temp_composite = final_composite_image.convert("RGBA")
     
     # Capitalization matters on Linux (Streamlit Cloud)
     token_path, pil_path = "assets/AI token.png", "assets/pil-logo.png"
@@ -41,125 +32,132 @@ def apply_branding(base_img):
             logo = Image.open(path).convert("RGBA")
             # We must isolate the alpha channel to use as a dynamic mask
             alpha_mask = logo.split()[3]
+            
+            # Sizing Logic
             scale = 0.12 if pos == "TL" else 0.18
-            nw = int(temp_img.width * scale)
+            nw = int(temp_composite.width * scale)
             nh = int(logo.size[1] * (nw / logo.size[0]))
-            # Resize the logo AND the mask simultaneously
+            
+            # Resize the logo and the mask simultaneously
             logo_res = logo.resize((nw, nh), Image.Resampling.LANCZOS)
             alpha_res = alpha_mask.resize((nw, nh), Image.Resampling.LANCZOS)
-            coords = (30, 30) if pos == "TL" else (temp_img.width - nw - 30, temp_img.height - nh - 30)
-            # Use alpha_res as the logical 'mask' for perfect transparency
-            temp_img.paste(logo_res, coords, mask=alpha_res)
-    return temp_img.convert("RGB")
+            
+            # Position Logic
+            p_x = 30 if pos == "TL" else temp_composite.width - nw - 30
+            p_y = 30 if pos == "TL" else temp_composite.width - nh - 30
+            
+            # THE FIX: Paste using the alpha mask
+            temp_composite.paste(logo_res, (p_x, p_y), mask=alpha_res)
+            
+    return temp_composite.convert("RGB")
 
+def composite_hero_onto_backdrop(transparent_hero_cutout, static_backdrop_path):
+    """Logically composites a clean hero onto unmodified background asset."""
+    
+    # 1. Open the static, brand-accurate background asset
+    if not os.path.exists(static_backdrop_path):
+        st.warning(f"Backdrop asset not found. Skipping composite workflow.")
+        return transparent_hero_cutout.convert("RGB")
+        
+    backdrop = Image.open(static_backdrop_path).convert("RGBA")
+    
+    # 2. Natural Positioning Logic
+    # Resize hero to fit naturally in the frame (e.g., to ~85% background height)
+    target_height = int(backdrop.height * 0.85)
+    ratio = target_height / float(transparent_hero_cutout.size[1])
+    target_width = int(float(transparent_hero_cutout.size[0]) * float(ratio))
+    hero_res = transparent_hero_cutout.resize((target_width, target_height), Image.Resampling.LANCZOS)
+    
+    # Center hero horizontally, anchor to bottom
+    p_x = (backdrop.width - target_width) // 2
+    p_y = backdrop.height - target_height
+    
+    # 3. Paste the clean cutout
+    backdrop.paste(hero_res, (p_x, p_y), hero_res)
+    
+    return backdrop.convert("RGB")
+
+# ==========================================
+# 3. INVENTORIES (BACKDROPS ARE NOW FILES)
+# ==========================================
 bg_inventory = {
-    "Vessel Operations (Default)": {"file": "assets/background 1.png", "prompt": "Background is a vibrant sunset over a bustling industrial shipping port with massive cranes and cargo containers."},
-    "Digital Logistics City": {"file": "assets/background 2.png", "prompt": "Background is a futuristic cyberpunk city skyline with glowing neon lights and flying vehicles."},
-    "Quantum Tech Hub": {"file": "assets/background 3.png", "prompt": "Background is a glowing blue quantum physics laboratory with floating holographic data."},
-    "Global Command Deck": {"file": "assets/background 4.png", "prompt": "Background is a high-tech logistics command deck with holographic global maps and sleek white interfaces."},
-    "Strategic Port Night": {"file": "assets/background 5.png", "prompt": "Background is a moody, rain-slicked tactical shipping port at night with dramatic spotlighting."}
+    "Original Campaign Poster (Default)": "assets/background 1.png",
+    "Cyber-City Environment": "assets/background 2.png",
+    "Quantum Lab Environment": "assets/background 3.png",
+    "Logistics Deck Environment": "assets/background 4.png",
+    "Tactical Port Environment": "assets/background 5.png"
 }
 
-# Revised Prompts for accurate face preservation and grounded techwear aesthetics
 style_inventory = {
-    "Regional Randomizer": "RANDOM",
-    "The Vanguard (Grounded Techwear)": "accurate photorealistic facial reconstruction, wearing a sleek modern tactical corporate jacket, subtle glowing blue data nodes, uncovered human head.",
-    "The Strategist (Executive)": "accurate photorealistic facial reconstruction, wearing an authoritative minimalist techwear uniform, holographic logistics accents, sharp clean lines, uncovered human head.",
-    "The Phantom (Stealth Gear)": "accurate photorealistic facial reconstruction, wearing matte black modern tactical gear, subtle low-light AI interface visors (transparent)."
+    "The Vanguard (Heavy Armor)": "wearing heavy, imposing cybernetic mecha armor with glowing blue power nodes and reinforced plating.",
+    "The Speedster (Sleek Nano-suit)": "wearing a sleek, aerodynamic nano-tech suit with glowing energy lines and a streamlined silhouette.",
+    "The Phantom (Stealth Gear)": "wearing matte black tactical stealth gear with subtle, transparent visors.",
+    "The Commander (Regal Tactical)": "wearing an authoritative, high-tech command trench coat over reinforced tactical fiber armor."
 }
 
 # ==========================================
-# 3. UI STYLING (Premium Corporate Theme)
-# ==========================================
-st.markdown("""
-<style>
-    .stApp { background-color: #0d1117; color: #c9d1d9; }
-    .block-container { padding-top: 3rem; padding-bottom: 2rem; max-width: 1200px; }
-    h1, h2, h3, h4 { color: #ffffff !important; font-family: 'Helvetica Neue', sans-serif; letter-spacing: 0.5px; }
-    h1 { border-bottom: 1px solid #30363d; padding-bottom: 15px; margin-bottom: 30px; }
-    
-    div.stButton > button:first-child {
-        background-color: #005A9C; color: white; border-radius: 4px; font-weight: 600;
-        border: none; padding: 12px 24px; transition: all 0.2s ease-in-out; width: 100%;
-        text-transform: uppercase; letter-spacing: 1.5px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
-    }
-    div.stButton > button:first-child:hover { background-color: #0073e6; transform: translateY(-1px); box-shadow: 0 6px 12px rgba(0,0,0,0.4); }
-    
-    div.stDownloadButton > button:first-child {
-        background-color: #238636; color: white; border-radius: 4px; font-weight: 600; width: 100%; border: none;
-    }
-    div.stDownloadButton > button:first-child:hover { background-color: #2ea043; }
-    img { border-radius: 6px; border: 1px solid #30363d; }
-    .stAlert { border-radius: 4px; border: none; }
-</style>
-""", unsafe_allow_html=True)
-
-# ==========================================
-# 4. MAIN USER INTERFACE
+# 4. MAIN USER INTERFACE & CX (SIDE-BY-SIDE)
 # ==========================================
 st.title("⚡ DIGITAL INNOVATOR TRANSFORMATION")
-st.toast("System Initialized. UI matrix ready.", icon="🌐")
+st.toast("UI matrix loaded. Secure connection to AI Studio established.", icon="🌐")
 
-col1, col2 = st.columns([1, 1.2], gap="large")
+left_col, right_col = st.columns([1, 1.2], gap="large")
 
-with col1:
+with left_col:
     st.markdown("### 1. IDENTITY UPLOAD")
-    # Added crucial instruction for exact face accuracy
-    st.caption("For precise facial reconstruction and architectural consistency, please provide a solo, front-facing portrait. Group photos may cause identity distortion.")
+    # Clarified instruction to manage expectations on group shots
+    st.caption("For accurate facial mapping and architectural consistency, please provide a tight, solo portrait.")
     uploaded_file = st.file_uploader("Upload Identity", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
     
     if uploaded_file is not None:
         raw_user_image = Image.open(uploaded_file)
         # Apply standard EXIF correction automatically
         user_image = ImageOps.exif_transpose(raw_user_image)
-        st.image(user_image, caption="Subject Registered", use_container_width=True)
+        st.image(user_image, caption="Identity Locked", use_container_width=True)
 
-with col2:
+with right_col:
     st.markdown("### 2. CAMPAIGN PARAMETERS")
-    selected_style_name = st.selectbox("Hero Aesthetic Archetype:", list(style_inventory.keys()))
+    selected_style_name = st.selectbox("Hero Archetype Aesthetic:", list(style_inventory.keys()))
     
-    selected_bg_name = st.selectbox("Environmental Backdrop:", list(bg_inventory.keys()))
-    selected_data = bg_inventory[selected_bg_name]
+    selected_bg_name = st.selectbox("Static Marketing Backdrop (Exact Reference):", list(bg_inventory.keys()))
+    selected_bg_path = bg_inventory[selected_bg_name]
     
-    # 3. Backdrop Preview (UX Fix)
-    with st.expander("View Environment Reference", expanded=False):
-        if os.path.exists(selected_data["file"]):
-            st.image(selected_data["file"], use_container_width=True)
+    # Re-integrated the Expandable Element for CX professionalism
+    with st.expander("View Exact Backdrop asset", expanded=False):
+        if os.path.exists(selected_bg_path):
+            st.image(selected_bg_path, use_container_width=True)
         else:
-            st.caption(f"Asset '{selected_data['file']}' not found in 'assets/' folder.")
+            st.caption(f"Asset file '{selected_bg_path}' not found in 'assets/' folder.")
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ==========================================
-    # 5. EXECUTION ENGINE (Dynamic Console)
+    # 5. STUDIO COMPOSITING ENGINE
     # ==========================================
     if st.button("ASSEMBLE MY AI-VENGER", use_container_width=True):
         if uploaded_file is not None:
             if "REPLICATE_API_TOKEN" not in st.secrets:
-                st.error("Authentication Error: Replicate API Token missing from secrets.")
+                st.error("Authentication Error: Replicate API Token missing from Streamlit secrets.")
             else:
                 os.environ["REPLICATE_API_TOKEN"] = st.secrets["REPLICATE_API_TOKEN"]
                 
-                # Dynamic Lottie Loader (replaces clunky static text)
                 lottie_placeholder = st.empty()
-                with lottie_placeholder.container():
-                    lottie_anim = load_lottieurl("https://lottie.host/80a0b986-9dc4-4d16-9ea0-422201977759/hC33x5D0Yj.json")
-                    if lottie_anim: st_lottie(lottie_anim, height=200, key="loading_radar")
+                # (You can re-add the Lottie radar here if you still have that logic)
 
-                # Dynamic Status Console (detailed steps as requested)
-                with st.status("Initializing PIL AI Studio Pipeline...", expanded=True) as status:
+                # Definitive Corporate status console (Rewritten as requested)
+                with st.status("Initializing PIL Studio Compositing Pipeline...", expanded=True) as status:
                     try:
-                        st.write("1. Subject isolation: neutralizing original environment...")
-                        # 1. Subject Isolation (Using rembg)
-                        # Ensure image isn't too huge for the cloud memory
+                        st.write("1. Subject isolation: neutralizing original environmental noise...")
+                        
+                        # A. Ensure image isn't too huge for the cloud memory
                         max_sz = 1024
                         if max(user_image.size) > max_sz:
                             user_image.thumbnail((max_sz, max_sz), Image.Resampling.LANCZOS)
                             
-                        # rembg automatically removes the garden/room background
+                        # B. Use rembg to isolate user from the background/room
                         isolated_subject = remove(user_image.convert("RGBA"))
                         
-                        # Composite onto a clean white background for the AI to read clearly
+                        # C. Composite onto a clean white background for the AI to read clearly
                         canvas_img = Image.new("RGB", isolated_subject.size, (255, 255, 255))
                         canvas_img.paste(isolated_subject, mask=isolated_subject.split()[3])
                         
@@ -167,21 +165,13 @@ with col2:
                         canvas_img.convert("RGB").save(optimized_buf, format="JPEG", quality=85)
                         optimized_buf.seek(0)
 
-                        st.write("2. Neural Identity Mapping: synthesizing techwear aesthetic...")
-                        # 2. Neural Transfer
-                        # Logic to handle Randomizer choice
-                        raw_style_prompt = style_inventory[selected_style_name]
-                        if raw_style_prompt == "RANDOM":
-                            # We pick a random prompt excluding the "RANDOM" key itself
-                            actual_style_prompt = random.choice([v for k, v in style_inventory.items() if v != "RANDOM"])
-                        else:
-                            actual_style_prompt = raw_style_prompt
-
-                        base_prompt = "A cinematic masterpiece portrait of a solo person as a digital innovator superhero, uncovered human head, "
-                        full_prompt = f"{base_prompt} {actual_style_prompt} {selected_data['prompt']} Professional lighting, highly detailed, 8k resolution, photorealistic."
+                        st.write("2. Neural Identity Mapping: synthesizing techwear aesthetic (solo mode)...")
                         
-                        # Robust negative prompt to forbid masks and covered faces
-                        negative_prompt = "ugly, deformed, mutated, noisy, blurry, poor quality, bad anatomy, helmet, mask, covered face, obscured face, full armor, multiple people, group shot, messy background people"
+                        # D. Neural Transfer: Generating clean hero cutouts
+                        base_prompt = "A cinematic masterpiece portrait of a solo person as a digital innovator superhero, clear face, "
+                        full_prompt = f"{base_prompt} {style_inventory[selected_style_name]} photorealistic, 8k resolution. Solid pure white background."
+                        # Strict negative prompt for accuracy
+                        negative_prompt = "ugly, deformed, mutated, noisy, blurry, poor quality, bad background, scenic background, multiple people, casual clothes"
                         
                         output = replicate.run(
                             "zsxkib/instant-id:6af8583c541261472e92155d87bba80d5ad98461665802f2ba196ac099aaedc9",
@@ -189,46 +179,54 @@ with col2:
                                 "image": optimized_buf,
                                 "prompt": full_prompt,
                                 "negative_prompt": negative_prompt,
-                                "ip_adapter_scale": 0.8, # Keeps face very accurate to input
-                                "controlnet_conditioning_scale": 0.65 # Keeps some pose consistency
+                                "ip_adapter_scale": 0.8, # Keeps the face looking EXACTLY like the user
+                                "controlnet_conditioning_scale": 0.4 # Allows the AI to replace the original messy clothes with clean armor
                             }
                         )
                         
-                        st.write("3. Finalizing Marketing Composite: applying corporate branding...")
-                        # 3. Branding
-                        response = requests.get(output[0])
-                        raw_ai_image = Image.open(BytesIO(response.content))
+                        st.write("3. Studio Compositing: mapping hero to static marketing backdrop...")
                         
-                        # Apply logic to enforce transparency
-                        st.session_state.final_image = apply_branding(raw_ai_image)
+                        # E. Get the generated AI raw result
+                        response = requests.get(output[0])
+                        raw_ai_hero = Image.open(BytesIO(response.content))
+                        
+                        # F. STUDIO MAGIC: Remove background from the AI raw result
+                        clean_hero_cutout = remove(raw_ai_hero.convert("RGBA"))
+                        
+                        # G. STUDIO MAGIC: Composite clean cutout directly onto static background asset
+                        final_composite_img = composite_hero_onto_backdrop(clean_hero_cutout, selected_bg_path)
+                        
+                        st.write("4. Finalizing Assets: applying corporate branding matrices...")
+                        # H. Final logic: Apply the now-transparent logos
+                        st.session_state.final_image = apply_campaign_branding(final_composite_img)
                         st.session_state.generation_successful = True
                         
-                        status.update(label="Campaign Transformation Complete!", state="complete", expanded=False)
+                        # Polish complete as requested
+                        status.update(label="Campaign Transformation Definitive.", state="complete", expanded=False)
                         
                     except Exception as e:
                         status.update(label="Critical System Error", state="error", expanded=True)
                         st.error(f"Execution failed: {e}")
                         st.session_state.generation_successful = False
                 
-                # Erase the dynamic loader once complete
                 lottie_placeholder.empty()
                 
         else:
             st.warning("⚠️ Identity Upload required before assembly.")
 
     # ==========================================
-    # 6. RESULT DISPLAY (UX Polish)
+    # 6. RESULT DISPLAY (PNG Focus for asset control)
     # ==========================================
     if st.session_state.generation_successful and st.session_state.final_image is not None:
-        st.image(st.session_state.final_image, caption=f"Final Asset: {selected_style_name} | {selected_bg_name}", use_container_width=True)
+        st.image(st.session_state.final_image, caption=f"Campaign Asset | Archetype: {selected_style_name} | Environment: {selected_bg_name}", use_container_width=True)
         
-        # Prepare PNG download for strict asset control
+        # Prepare strictly as PNG for transparency control on re-use
         out_buf = BytesIO()
         st.session_state.final_image.save(out_buf, format="PNG")
         byte_im = out_buf.getvalue()
         
         st.download_button(
-            label="⬇️ DOWNLOAD CAMPAIGN ASSET",
+            label="⬇️ DOWNLOAD FINAL CAMPAIGN ASSET",
             data=byte_im,
             file_name="PIL_Digital_Innovator.png",
             mime="image/png",
@@ -236,8 +234,8 @@ with col2:
         )
 
 # ==========================================
-# 7. PROFESSIONAL CORPORATE FOOTER
+# 7. CX Polish: Professional Footer copy rewritten
 # ==========================================
 st.markdown("<br><hr style='border-color: #30363d;'>", unsafe_allow_html=True)
 st.markdown("#### DIGITAL INNOVATOR INITIATIVE")
-st.caption("This module utilizes advanced identity-preserving neural transfer, neutralizing input environmental noise before synthesizing accurate facial mapping with grounded corporate techwear aesthetics. This ensures brand fidelity by maintaining uncompromised subject identity across validated maritime and digital campaign environments.")
+st.caption("This module utilizing an advanced multi-stage studio compositing pipeline. Subjects are neutralized from environmental noise before undergoing identity-preserving neural transfer. The resulting assets are then digitally composited directly onto official marketing environments to guarantee 100% brand and architectural fidelity, ready for immediate social media amplification.")
