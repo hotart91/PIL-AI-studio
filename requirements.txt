@@ -1,3 +1,5 @@
 streamlit
 pillow
 replicate
+requests
+rembg
