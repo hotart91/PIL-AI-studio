@@ -5,11 +5,21 @@ import os
 import requests
 from io import BytesIO
 import random
+from rembg import remove
+from streamlit_lottie import st_lottie
 
 # ==========================================
 # 1. PAGE CONFIGURATION & SESSION MEMORY
 # ==========================================
 st.set_page_config(page_title="PIL | Digital Innovator", layout="wide", initial_sidebar_state="collapsed")
+
+# Cache the Lottie animation for performance
+@st.cache_data
+def load_lottieurl(url: str):
+    r = requests.get(url)
+    if r.status_code != 200:
+        return None
+    return r.json()
 
 if 'final_image' not in st.session_state:
     st.session_state.final_image = None
@@ -17,187 +27,188 @@ if 'generation_successful' not in st.session_state:
     st.session_state.generation_successful = False
 
 # ==========================================
-# 2. PREMIUM UX STYLING (CSS)
+# 2. PREMIUM UX STYLING & DYNAMIC ANIMATIONS
 # ==========================================
 st.markdown("""
 <style>
+    /* Base Theme & Entry Animation */
     .stApp { background-color: #0d1117; color: #c9d1d9; }
-    .block-container { padding-top: 3rem; padding-bottom: 2rem; max-width: 1200px; }
+    .block-container { 
+        padding-top: 3rem; padding-bottom: 2rem; max-width: 1200px; 
+        animation: fadeUp 0.8s cubic-bezier(0.16, 1, 0.3, 1) forwards; 
+    }
+
+    @keyframes fadeUp {
+        from { opacity: 0; transform: translateY(20px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+    @keyframes pulseGlow {
+        0% { box-shadow: 0 4px 15px rgba(0, 90, 156, 0.4); }
+        50% { box-shadow: 0 4px 25px rgba(0, 115, 230, 0.7); }
+        100% { box-shadow: 0 4px 15px rgba(0, 90, 156, 0.4); }
+    }
+
     h1, h2, h3, h4 { color: #ffffff !important; font-family: 'Helvetica Neue', sans-serif; letter-spacing: 0.5px; }
     h1 { border-bottom: 1px solid #30363d; padding-bottom: 15px; margin-bottom: 30px; }
+
+    /* Animated Primary Button */
     div.stButton > button:first-child {
         background-color: #005A9C; color: white; border-radius: 4px; font-weight: 600;
-        border: none; padding: 12px 24px; transition: all 0.2s ease-in-out; width: 100%;
-        text-transform: uppercase; letter-spacing: 1.5px; box-shadow: 0 4px 6px rgba(0,0,0,0.3);
+        border: none; padding: 12px 24px; transition: all 0.3s ease-in-out; width: 100%;
+        text-transform: uppercase; letter-spacing: 1.5px;
+        animation: pulseGlow 3s infinite;
     }
-    div.stButton > button:first-child:hover { background-color: #0073e6; transform: translateY(-1px); box-shadow: 0 6px 12px rgba(0,0,0,0.4); }
+    div.stButton > button:first-child:hover { 
+        background-color: #0073e6; transform: translateY(-2px); box-shadow: 0 6px 20px rgba(0, 115, 230, 0.9); 
+    }
+
+    /* Download Button */
     div.stDownloadButton > button:first-child {
         background-color: #238636; color: white; border-radius: 4px; font-weight: 600; width: 100%; border: none;
+        transition: all 0.2s ease-in-out;
     }
-    div.stDownloadButton > button:first-child:hover { background-color: #2ea043; }
-    img { border-radius: 6px; border: 1px solid #30363d; }
-    .stAlert { border-radius: 4px; border: none; }
+    div.stDownloadButton > button:first-child:hover { background-color: #2ea043; transform: scale(1.02); }
+
+    /* Interactive Images */
+    img { border-radius: 6px; border: 1px solid #30363d; transition: all 0.3s ease; }
+    img:hover { border-color: #005A9C; box-shadow: 0 0 15px rgba(0, 90, 156, 0.3); }
 </style>
 """, unsafe_allow_html=True)
 
 # ==========================================
-# 3. BRANDING LOGIC & INVENTORIES
+# 3. COMPOSITOR & BRANDING LOGIC
 # ==========================================
-def apply_campaign_branding(generated_image):
-    base_img = generated_image.convert("RGBA")
-    token_path, pil_path = "assets/AI token.png", "assets/pil-logo.png"
+def execute_studio_compositing(ai_hero_image, background_path):
+    """Composites the AI Hero onto static marketing background with logos."""
+    transparent_hero = remove(ai_hero_image.convert("RGBA"))
     
+    if not os.path.exists(background_path):
+        return transparent_hero.convert("RGB")
+        
+    backdrop = Image.open(background_path).convert("RGBA")
+    
+    # Scale hero to 85% of background height
+    target_height = int(backdrop.height * 0.85)
+    ratio = target_height / float(transparent_hero.size[1])
+    target_width = int(float(transparent_hero.size[0]) * float(ratio))
+    transparent_hero = transparent_hero.resize((target_width, target_height), Image.Resampling.LANCZOS)
+    
+    # Position hero center-bottom
+    x_pos = (backdrop.width - target_width) // 2
+    y_pos = backdrop.height - target_height
+    backdrop.paste(transparent_hero, (x_pos, y_pos), transparent_hero)
+    
+    # Stamp Logos (Handles .png requirements)
+    token_path, pil_path = "assets/AI token.png", "assets/pil-logo.png"
     try:
         if os.path.exists(token_path):
-            ai_token = Image.open(token_path).convert("RGBA")
-            t_width = int(base_img.width * 0.12)
-            t_ratio = t_width / float(ai_token.size[0])
-            t_height = int(float(ai_token.size[1]) * float(t_ratio))
-            token_resized = ai_token.resize((t_width, t_height), Image.Resampling.LANCZOS)
-            base_img.paste(token_resized, (30, 30), token_resized) 
-
+            tk = Image.open(token_path).convert("RGBA")
+            tk_w = int(backdrop.width * 0.12)
+            tk_h = int(tk.size[1] * (tk_w / tk.size[0]))
+            backdrop.paste(tk.resize((tk_w, tk_h)), (30, 30), tk.resize((tk_w, tk_h)))
         if os.path.exists(pil_path):
-            pil_logo = Image.open(pil_path).convert("RGBA")
-            p_width = int(base_img.width * 0.18)
-            p_ratio = p_width / float(pil_logo.size[0])
-            p_height = int(float(pil_logo.size[1]) * float(p_ratio))
-            pil_resized = pil_logo.resize((p_width, p_height), Image.Resampling.LANCZOS)
-            p_x, p_y = base_img.width - p_width - 30, base_img.height - p_height - 30
-            base_img.paste(pil_resized, (p_x, p_y), pil_resized)
-    except Exception:
-        pass
-    return base_img.convert("RGB")
+            pl = Image.open(pil_path).convert("RGBA")
+            pl_w = int(backdrop.width * 0.18)
+            pl_h = int(pl.size[1] * (pl_w / pl.size[0]))
+            backdrop.paste(pl.resize((pl_w, pl_h)), (backdrop.width - pl_w - 30, backdrop.height - pl_h - 30), pl.resize((pl_w, pl_h)))
+    except: pass
+    return backdrop.convert("RGB")
 
 bg_inventory = {
-    "Original Campaign Poster": {"file": "assets/background 1.png", "prompt": "Background is a vibrant sunset over a bustling industrial shipping port with massive cranes and cargo containers."},
-    "Cyber-City Environment": {"file": "assets/background 2.png", "prompt": "Background is a futuristic cyberpunk city skyline with glowing neon lights and flying vehicles."},
-    "Quantum Lab Environment": {"file": "assets/background 3.png", "prompt": "Background is a glowing blue quantum physics laboratory with floating holographic data."},
-    "Logistics Deck Environment": {"file": "assets/background 4.png", "prompt": "Background is a high-tech logistics command deck with holographic global maps and sleek white interfaces."},
-    "Tactical Port Environment": {"file": "assets/background 5.png", "prompt": "Background is a moody, rain-slicked tactical shipping port at night with dramatic spotlighting."}
+    "Vessel Operations (Default)": "assets/background 1.png",
+    "Digital Logistics City": "assets/background 2.png",
+    "Quantum Tech Hub": "assets/background 3.png",
+    "Global Command Deck": "assets/background 4.png",
+    "Strategic Port Night": "assets/background 5.png"
 }
 
 style_inventory = {
-    "Random Regional Archetype (Surprise Me)": "RANDOM",
-    "The Commander (Regal Tactical)": "wearing an authoritative, high-tech command trench coat over reinforced tactical fiber armor.",
-    "The Vanguard (Heavy Armor)": "wearing heavy, imposing cybernetic mecha armor with glowing blue power nodes and reinforced plating.",
-    "The Speedster (Sleek Nano-suit)": "wearing a sleek, aerodynamic nano-tech suit with glowing energy lines and a streamlined silhouette.",
-    "The Phantom (Stealth Gear)": "wearing matte black tactical stealth gear with dark visors and subtle low-light accents."
+    "Random Regional Aesthetic": "RANDOM",
+    "The Vanguard (Techwear)": "wearing sleek modern tactical corporate jacket, glowing blue data nodes, smart-fabric.",
+    "The Strategist (Executive Tech)": "wearing authoritative minimalist techwear uniform, holographic logistics accents.",
+    "The Phantom (Stealth Innovator)": "wearing matte black modern tactical gear, subtle AI interface visors."
 }
 
 # ==========================================
 # 4. MAIN USER INTERFACE
 # ==========================================
 st.title("⚡ DIGITAL INNOVATOR TRANSFORMATION")
+st.toast("System Initialized. Identity Mapping Active.", icon="🌐")
 
-left_col, right_col = st.columns([1, 1.2], gap="large")
+l_col, r_col = st.columns([1, 1.2], gap="large")
 
-with left_col:
+with l_col:
     st.markdown("### 1. IDENTITY UPLOAD")
-    st.caption("For optimal neural mapping, please provide a solo, front-facing portrait. Group photos may cause identity extraction failures.")
-    
-    uploaded_file = st.file_uploader("Provide a clear, front-facing portrait", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
+    st.caption("Upload a solo portrait. Backgrounds will be neutralized for campaign continuity.")
+    uploaded_file = st.file_uploader("Upload", type=["jpg", "jpeg", "png"], label_visibility="collapsed")
     
     if uploaded_file is not None:
-        raw_user_image = Image.open(uploaded_file)
-        user_image = ImageOps.exif_transpose(raw_user_image)
-        st.image(user_image, caption="Identity Registered", use_container_width=True)
+        user_image = ImageOps.exif_transpose(Image.open(uploaded_file))
+        st.image(user_image, caption="Identity Locked", use_container_width=True)
 
-with right_col:
+with r_col:
     st.markdown("### 2. CAMPAIGN PARAMETERS")
-    selected_style_name = st.selectbox("Hero Archetype:", list(style_inventory.keys()))
+    style_name = st.selectbox("Hero Aesthetic:", list(style_inventory.keys()))
+    bg_name = st.selectbox("Marketing Backdrop:", list(bg_inventory.keys()))
     
-    selected_bg_name = st.selectbox("Environmental Reference:", list(bg_inventory.keys()))
-    selected_data = bg_inventory[selected_bg_name]
-    
-    with st.expander("View Environment Reference", expanded=False):
-        if os.path.exists(selected_data["file"]):
-            st.image(selected_data["file"], use_container_width=True)
-        else:
-            st.caption(f"Reference image '{selected_data['file']}' not found in assets.")
+    with st.expander("View Environment Reference"):
+        if os.path.exists(bg_inventory[bg_name]):
+            st.image(bg_inventory[bg_name], use_container_width=True)
 
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ==========================================
-    # 5. EXECUTION & DYNAMIC STATUS
+    # 5. EXECUTION ENGINE
     # ==========================================
     if st.button("ASSEMBLE MY AI-VENGER", use_container_width=True):
         if uploaded_file is not None:
             os.environ["REPLICATE_API_TOKEN"] = st.secrets["REPLICATE_API_TOKEN"]
             
-            with st.status("Initializing PIL AI Engine...", expanded=True) as status:
+            anim_placeholder = st.empty()
+            with anim_placeholder.container():
+                lottie_url = "https://lottie.host/80a0b986-9dc4-4d16-9ea0-422201977759/hC33x5D0Yj.json"
+                st_lottie(load_lottieurl(lottie_url), height=250, key="loader")
+            
+            with st.status("Executing Studio Compositing...", expanded=True) as status:
                 try:
-                    st.write("Optimizing image payload...")
+                    # Clean input
                     max_size = 1024
-                    if max(user_image.size) > max_size:
-                        user_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                    if max(user_image.size) > max_size: user_image.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                    isolated = remove(user_image.convert("RGBA"))
+                    white_canvas = Image.new("RGB", isolated.size, (255, 255, 255))
+                    white_canvas.paste(isolated, mask=isolated.split()[3])
                     
-                    optimized_buffer = BytesIO()
-                    user_image.convert("RGB").save(optimized_buffer, format="JPEG", quality=85)
-                    optimized_buffer.seek(0)
+                    buf = BytesIO()
+                    white_canvas.save(buf, format="JPEG", quality=85)
+                    buf.seek(0)
 
-                    st.write("Executing Identity-Preserving Neural Transfer...")
+                    # AI Generation
+                    style_p = style_inventory[style_name]
+                    if style_p == "RANDOM": style_p = random.choice([v for k,v in style_inventory.items() if v != "RANDOM"])
                     
-                    # Logic to handle the Random Archetype
-                    raw_style_prompt = style_inventory[selected_style_name]
-                    if raw_style_prompt == "RANDOM":
-                        # Pick a random style excluding the "RANDOM" key
-                        actual_style_prompt = random.choice([v for k, v in style_inventory.items() if v != "RANDOM"])
-                    else:
-                        actual_style_prompt = raw_style_prompt
-
-                    base_prompt = "A masterpiece, cinematic portrait of a solo person as a digital innovator superhero, "
-                    full_prompt = f"{base_prompt} {actual_style_prompt} {selected_data['prompt']} Professional studio lighting, highly detailed, photorealistic."
-                    negative_prompt = "ugly, deformed, mutated, noisy, blurry, poor quality, bad anatomy, bad background, messy, multiple people, everyday clothes"
-                    
-                    # API Call with Foolproof Parameters
+                    prompt = f"Cinematic full-body portrait of a person, {style_p} Isolated on a pure solid white background. Photorealistic, corporate photography."
                     output = replicate.run(
                         "zsxkib/instant-id:6af8583c541261472e92155d87bba80d5ad98461665802f2ba196ac099aaedc9",
-                        input={
-                            "image": optimized_buffer,
-                            "prompt": full_prompt,
-                            "negative_prompt": negative_prompt,
-                            "ip_adapter_scale": 0.85, # High: keeps the face looking exactly like the user
-                            "controlnet_conditioning_scale": 0.4 # Low: allows the AI to completely replace original clothes and background
-                        }
+                        input={"image": buf, "prompt": prompt, "negative_prompt": "messy, room, cyborg, armor", "ip_adapter_scale": 0.85, "controlnet_conditioning_scale": 0.4}
                     )
                     
-                    st.write("Applying corporate branding matrices...")
-                    response = requests.get(output[0])
-                    raw_ai_image = Image.open(BytesIO(response.content))
-                    
-                    st.session_state.final_image = apply_campaign_branding(raw_ai_image)
+                    # Composite
+                    ai_raw = Image.open(BytesIO(requests.get(output[0]).content))
+                    st.session_state.final_image = execute_studio_compositing(ai_raw, bg_inventory[bg_name])
                     st.session_state.generation_successful = True
-                    
-                    status.update(label="Transformation Complete!", state="complete", expanded=False)
-                    
+                    status.update(label="Campaign Asset Created!", state="complete", expanded=False)
                 except Exception as e:
-                    status.update(label="System Error", state="error", expanded=True)
-                    st.error(f"Execution failed: {e}")
-                    st.session_state.generation_successful = False
-        else:
-            st.warning("⚠️ Identity Upload required before assembly.")
+                    st.error(f"Error: {e}")
+            anim_placeholder.empty()
 
-    # ==========================================
-    # 6. RESULT DISPLAY & DOWNLOAD
-    # ==========================================
-    if st.session_state.generation_successful and st.session_state.final_image is not None:
-        st.image(st.session_state.final_image, caption=f"Final Asset: {selected_style_name}", use_container_width=True)
-        
-        buf = BytesIO()
-        st.session_state.final_image.save(buf, format="PNG")
-        byte_im = buf.getvalue()
-        
-        st.download_button(
-            label="⬇️ DOWNLOAD CAMPAIGN ASSET",
-            data=byte_im,
-            file_name="PIL_Digital_Innovator.png",
-            mime="image/png",
-            use_container_width=True
-        )
+    if st.session_state.generation_successful and st.session_state.final_image:
+        st.image(st.session_state.final_image, use_container_width=True)
+        img_buf = BytesIO()
+        st.session_state.final_image.save(img_buf, format="PNG")
+        st.download_button("⬇️ DOWNLOAD CAMPAIGN ASSET", img_buf.getvalue(), "PIL_Asset.png", "image/png", use_container_width=True)
 
 # ==========================================
-# 7. PROFESSIONAL CORPORATE FOOTER
+# 7. CORPORATE FOOTER
 # ==========================================
 st.markdown("<br><hr style='border-color: #30363d;'>", unsafe_allow_html=True)
-st.markdown("#### DIGITAL INNOVATOR INITIATIVE")
-st.caption("This module utilizes an advanced identity-preserving neural network designed for commercial operations and logistics professionals. By extracting high-level facial mapping and synthesizing it with custom maritime and cyber-infrastructure environments, the system generates high-fidelity, campaign-ready visual assets. This ensures brand consistency across digital transformation campaigns while maintaining strict architectural continuity within generated environments.")
+st.caption("DIGITAL INNOVATOR INITIATIVE: Advanced identity-preserving neural transfer with automated brand-fidelity compositing.")
