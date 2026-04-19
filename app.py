@@ -126,7 +126,7 @@ with right_col:
     st.markdown("<br>", unsafe_allow_html=True)
 
     # ==========================================
-    # 5. EXECUTION & GENERATION
+    # 5. EXECUTION & GENERATION (OPTIMIZED)
     # ==========================================
     if st.button("ASSEMBLE MY AI-VENGER", use_container_width=True):
         if uploaded_file is not None:
@@ -134,6 +134,18 @@ with right_col:
             
             with st.spinner("Initiating Neural Style Transfer & Compositing..."):
                 try:
+                    # --- IMAGE OPTIMIZATION ---
+                    img_to_resize = Image.open(uploaded_file)
+                    max_size = 1024
+                    
+                    if max(img_to_resize.size) > max_size:
+                        img_to_resize.thumbnail((max_size, max_size), Image.Resampling.LANCZOS)
+                    
+                    optimized_buffer = BytesIO()
+                    img_to_resize.convert("RGB").save(optimized_buffer, format="JPEG", quality=85)
+                    optimized_buffer.seek(0)
+                    # --------------------------
+
                     # Dynamically combine the prompts based on user choices
                     base_prompt = "A cinematic portrait of a person as a digital innovator superhero, "
                     full_prompt = f"{base_prompt} {selected_style_prompt} {selected_data['prompt']} Professional lighting, highly detailed, photorealistic."
@@ -142,7 +154,7 @@ with right_col:
                         "stability-ai/sdxl:39ed52f2a78e934b3ba6e2a89f5b1c712de7dfea535525255b1aa35c5565e08b",
                         input={
                             "prompt": full_prompt,
-                            "image": uploaded_file,
+                            "image": optimized_buffer,
                             "prompt_strength": 0.65 
                         }
                     )
